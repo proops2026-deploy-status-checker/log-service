@@ -1,9 +1,13 @@
 import express from "express";
-import { PrismaClient } from "@prisma/client";
+import { LogLevel, PrismaClient } from "@prisma/client";
 
 const app = express();
 const port = process.env.PORT ?? 3002;
 const prisma = new PrismaClient();
+const defaultLimit = 50;
+const maxLimit = 200;
+
+app.use(express.json());
 
 // TIE-13: readiness depends on the Log Service's own database only.
 // Log ingestion, retrieval, and retention are implemented in TIE-14.
@@ -14,6 +18,42 @@ app.get("/health", async (_req, res) => {
   } catch {
     res.status(503).json({ status: "unavailable" });
   }
+});
+
+function parseCursor(value: unknown): { timestamp: Date; id: string } | null {
+  if (typeof value !== "string") return null;
+  try {
+    const [timestampMs, id] = Buffer.from(value, "base64").toString("utf8").split(":");
+    const timestamp = new Date(Number(timestampMs));
+    return Number.isNaN(timestamp.valueOf()) || !id ? null : { timestamp, id };
+  } catch { return null; }
+}
+
+app.post("/deploys/:id/logs", async (req, res) => {
+  const { level, message } = req.body ?? {};
+  if (!Object.values(LogLevel).includes(level) || typeof message !== "string" || !message) {
+    res.status(400).json({ error: "level (info|warn|error) and message are required" });
+    return;
+  }
+  const log = await prisma.logEntry.create({ data: { deployId: req.params.id, level, message } });
+  res.status(201).json(log);
+});
+
+app.get("/deploys/:id/logs", async (req, res) => {
+  const requestedLimit = Number(req.query.limit ?? defaultLimit);
+  const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, maxLimit) : defaultLimit;
+  const cursor = parseCursor(req.query.cursor);
+  if (req.query.cursor && !cursor) { res.status(400).json({ error: "invalid cursor" }); return; }
+  const level = req.query.level;
+  if (level && !Object.values(LogLevel).includes(level as LogLevel)) { res.status(400).json({ error: "invalid level" }); return; }
+  const entries = await prisma.logEntry.findMany({
+    where: { deployId: req.params.id, ...(level ? { level: level as LogLevel } : {}), ...(cursor ? { OR: [{ timestamp: { gt: cursor.timestamp } }, { timestamp: cursor.timestamp, id: { gt: cursor.id } }] } : {}) },
+    orderBy: [{ timestamp: "asc" }, { id: "asc" }], take: limit + 1
+  });
+  const hasNext = entries.length > limit;
+  const items = hasNext ? entries.slice(0, limit) : entries;
+  const last = items.at(-1);
+  res.json({ items, next_cursor: hasNext && last ? Buffer.from(`${last.timestamp.valueOf()}:${last.id}`).toString("base64") : null });
 });
 
 app.listen(port, () => {

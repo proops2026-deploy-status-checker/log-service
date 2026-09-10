@@ -7,4 +7,19 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// No models yet - walking skeleton only (schema added in TIE-14)
+enum LogLevel {
+  info
+  warn
+  error
+}
+
+model LogEntry {
+  id        String   @id @default(uuid())
+  deployId  String   @map("deploy_id")
+  timestamp DateTime @default(now())
+  level     LogLevel
+  message   String
+
+  @@index([deployId, timestamp(sort: Desc)])
+  @@map("log_entries")
+}
