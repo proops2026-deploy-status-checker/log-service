@@ -1,11 +1,13 @@
 import express from "express";
 import { LogLevel, PrismaClient } from "@prisma/client";
+import { scheduleDailyPurge } from "./retention";
 
 const app = express();
 const port = process.env.PORT ?? 3002;
 const prisma = new PrismaClient();
 const defaultLimit = 50;
 const maxLimit = 200;
+const retention = scheduleDailyPurge(prisma);
 
 app.use(express.json());
 
@@ -61,6 +63,7 @@ app.listen(port, () => {
 });
 
 async function shutdown() {
+  retention.stop();
   await prisma.$disconnect();
   process.exit(0);
 }

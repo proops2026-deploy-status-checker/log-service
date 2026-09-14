@@ -23,3 +23,15 @@ model LogEntry {
   @@index([deployId, timestamp(sort: Desc)])
   @@map("log_entries")
 }
+
+// IRD-002 §6: every retention purge run is recorded here, success or failure.
+model PurgeAuditLog {
+  id           String   @id @default(uuid())
+  ranAt        DateTime @default(now()) @map("ran_at")
+  cutoff       DateTime
+  deletedCount Int      @map("deleted_count")
+  status       String   @default("success")
+  errorMessage String?  @map("error_message")
+
+  @@map("purge_audit_log")
+}
