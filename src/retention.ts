@@ -27,7 +27,7 @@ export async function purgeExpiredLogs(prisma: PrismaClient, now: Date = new Dat
   }
 }
 
-function msUntilNext2amUtc(from: Date = new Date()): number {
+export function msUntilNext2amUtc(from: Date = new Date()): number {
   const next = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate(), 2, 0, 0, 0));
   if (next.getTime() <= from.getTime()) next.setUTCDate(next.getUTCDate() + 1);
   return next.getTime() - from.getTime();

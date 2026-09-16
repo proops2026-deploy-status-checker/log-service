@@ -1,6 +1,7 @@
 import express from "express";
 import { LogLevel, PrismaClient } from "@prisma/client";
 import { scheduleDailyPurge } from "./retention";
+import { parseCursor } from "./cursor";
 
 const app = express();
 const port = process.env.PORT ?? 3002;
@@ -21,15 +22,6 @@ app.get("/health", async (_req, res) => {
     res.status(503).json({ status: "unavailable" });
   }
 });
-
-function parseCursor(value: unknown): { timestamp: Date; id: string } | null {
-  if (typeof value !== "string") return null;
-  try {
-    const [timestampMs, id] = Buffer.from(value, "base64").toString("utf8").split(":");
-    const timestamp = new Date(Number(timestampMs));
-    return Number.isNaN(timestamp.valueOf()) || !id ? null : { timestamp, id };
-  } catch { return null; }
-}
 
 app.post("/deploys/:id/logs", async (req, res) => {
   const { level, message } = req.body ?? {};
