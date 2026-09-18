@@ -1,0 +1,23 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: log-service-migrate
+  namespace: deploy-status-checker
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: deploy-status-checker/log-service-migrate:local
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: log-service-cm
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: log-service-secret
+                  key: DATABASE_URL
