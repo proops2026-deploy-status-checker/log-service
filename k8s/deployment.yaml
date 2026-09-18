@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-service
+  namespace: deploy-status-checker
+  labels:
+    app: log-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: log-service
+  template:
+    metadata:
+      labels:
+        app: log-service
+    spec:
+      containers:
+        - name: log-service
+          image: deploy-status-checker/log-service:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3002
+          envFrom:
+            - configMapRef:
+                name: log-service-cm
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: log-service-secret
+                  key: DATABASE_URL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+            initialDelaySeconds: 10
+            periodSeconds: 10

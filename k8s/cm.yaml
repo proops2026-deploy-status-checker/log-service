@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: log-service-cm
+  namespace: deploy-status-checker
+data:
+  PORT: "3002"
