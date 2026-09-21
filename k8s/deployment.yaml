@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: log-service
-          image: deploy-status-checker/log-service:local
+          image: 241533152550.dkr.ecr.us-west-2.amazonaws.com/log-service:v1
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3002
