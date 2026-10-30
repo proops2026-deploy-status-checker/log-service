@@ -10,36 +10,46 @@ env:
   IMAGE: tert62/dsc-log-service
 
 jobs:
-  build-test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: "npm"
-
+        with: { node-version: "24", cache: "npm" }
       - run: npm ci
       - run: npx prisma generate
       - run: npm run lint
-      - run: npm run build
-      - run: npm test
-      - run: npm audit --audit-level=critical
 
-  build-tag-push:
-    needs: build-test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "24", cache: "npm" }
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm test # = npm run build && node --test
 
-      - name: Set short SHA
-        run: echo "SHORT_SHA=${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - run: npm audit --audit-level=critical
+
+  build-image:
+    needs: [lint, test, audit]
+    runs-on: ubuntu-latest
+    env:
+      PUSH_IMAGE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
 
-      - uses: docker/login-action@v3
+      - if: env.PUSH_IMAGE == 'true'
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -47,5 +57,94 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
-          tags: ${{ env.IMAGE }}:${{ env.SHORT_SHA }}
+          push: ${{ env.PUSH_IMAGE == 'true' }}
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: [build-image]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    env:
+      NAMESPACE: deploy-status-checker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: ci-${{ github.run_id }}
+          wait: 120s
+
+      - name: Create namespace
+        run: kubectl create namespace "$NAMESPACE"
+
+      - name: Deploy throwaway Postgres
+        run: |
+          kubectl run postgres -n "$NAMESPACE" --image=postgres:16 \
+            --env="POSTGRES_USER=postgres" \
+            --env="POSTGRES_PASSWORD=postgres" \
+            --env="POSTGRES_DB=log_service" \
+            --port=5432
+          kubectl expose pod postgres -n "$NAMESPACE" --port=5432
+
+      - name: Wait for Postgres ready
+        run: kubectl wait -n "$NAMESPACE" --for=condition=ready pod/postgres --timeout=60s
+
+      - name: Create log-service-secret
+        run: |
+          kubectl create secret generic log-service-secret -n "$NAMESPACE" \
+            --from-literal=DATABASE_URL="postgresql://postgres:postgres@postgres:5432/log_service"
+
+      - name: Build + load migrator image
+        run: |
+          docker build --target migrator -t log-service-migrate:ci .
+          kind load docker-image log-service-migrate:ci --name ci-${{ github.run_id }}
+
+      - name: Run migration Job
+        run: |
+          cat <<'YAML' | kubectl apply -n "$NAMESPACE" -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: log-service-migrate-ci
+          spec:
+            backoffLimit: 2
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: migrate
+                    image: log-service-migrate:ci
+                    imagePullPolicy: Never
+                    env:
+                      - name: DATABASE_URL
+                        valueFrom:
+                          secretKeyRef:
+                            name: log-service-secret
+                            key: DATABASE_URL
+          YAML
+
+      - name: Wait for migration to complete
+        run: kubectl wait -n "$NAMESPACE" --for=condition=complete job/log-service-migrate-ci --timeout=60s
+
+      - name: Apply K8s manifests with new image
+        run: |
+          sed -i "s|image: .*|image: ${IMAGE}:${GITHUB_SHA}|" k8s/deployment.yaml
+          grep -n "image:" k8s/deployment.yaml
+          kubectl apply -n "$NAMESPACE" -f k8s/cm.yaml -f k8s/deployment.yaml -f k8s/svc.yaml
+
+      - name: Wait for rollout
+        run: kubectl rollout status deployment/log-service -n "$NAMESPACE" --timeout=180s
+
+      - name: Show running image (evidence)
+        run: |
+          kubectl get pods -n "$NAMESPACE" -o wide
+          kubectl describe pod -n "$NAMESPACE" -l app=log-service | grep -E "Image:|Status:"
+
+      - name: Debug on failure
+        if: failure()
+        run: |
+          kubectl get events -n "$NAMESPACE" --sort-by=.lastTimestamp
+          kubectl describe pod -n "$NAMESPACE" -l app=log-service
+          kubectl logs -n "$NAMESPACE" -l app=log-service --tail=50 || true
