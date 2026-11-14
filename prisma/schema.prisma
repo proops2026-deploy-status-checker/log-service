@@ -19,8 +19,12 @@ model LogEntry {
   timestamp DateTime @default(now())
   level     LogLevel
   message   String
+  // Insertion order. `id` is a random UUID, so (timestamp, id) shuffled logs written in the same
+  // millisecond; (timestamp, seq) keeps them in the order CI sent them.
+  seq       BigInt   @unique @default(autoincrement())
 
-  @@index([deployId, timestamp(sort: Desc)])
+  // GET /deploys/:id/logs: WHERE deploy_id = ? ORDER BY timestamp, seq (keyset pagination).
+  @@index([deployId, timestamp, seq])
   @@map("log_entries")
 }
 
