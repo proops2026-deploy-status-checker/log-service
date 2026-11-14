@@ -4,3 +4,6 @@ dist/
 .env.*
 !.env.example
 *.log
+
+# Test coverage output (c8 → coverage/lcov.info, uploaded as a CI artifact)
+coverage/
